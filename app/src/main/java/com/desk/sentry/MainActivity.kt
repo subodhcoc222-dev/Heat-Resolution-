@@ -66,6 +66,15 @@ import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
 
+    // ==========================================
+    // THERMAL & RESOLUTION CONFIGURATION
+    // ==========================================
+    // 480p default for test. Change to Size(1280, 720) for 720p test.
+    private val CAMERA_ANALYSIS_RESOLUTION = Size(640, 480)
+    private val FRAME_THROTTLE_INTERVAL_MS = 200L // 5 FPS (200ms throttle)
+    private var lastAnalyzedFrameTimestamp = 0L
+    private var isCameraRunning = false
+
     private lateinit var prefs: SharedPreferences
     private var isSentryArmed = false
     private var isAlwaysActiveMode = false
@@ -228,7 +237,7 @@ class MainActivity : AppCompatActivity() {
         val savedDates = prefs.getStringSet("event_dates_set", HashSet()) ?: HashSet()
         FirebaseManager.syncAvailableDates(this, savedDates)
 
-        // Instant Live Push on Launch with alarm_active = false
+        // Instant Live Push on Launch
         pushLiveTelemetryToFirebase()
 
         previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
@@ -237,9 +246,13 @@ class MainActivity : AppCompatActivity() {
             showFirstTimeSetPinDialog()
         }
 
-        if (allPermissionsGranted()) {
+        val activeSlot = getActiveStudySlot()
+        val (isPreSlotActive, _) = getPreSlotWindowInfo()
+        val shouldCameraRun = !isSentryArmed || isAlwaysActiveMode || activeSlot != -1 || isPreSlotActive || isArmingGraceActive
+
+        if (allPermissionsGranted() && shouldCameraRun) {
             startCamera()
-        } else {
+        } else if (!allPermissionsGranted()) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 101)
         }
 
@@ -289,9 +302,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Pushes complete live telemetry including alarm_active to Firebase every single second.
-     */
     private fun pushLiveTelemetryToFirebase() {
         try {
             val deviceId = FirebaseManager.getOrGenerateDeviceId(this)
@@ -482,12 +492,22 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         SentryService.isMainActivityVisible = true
         SentryService.lastAppActiveTimestamp = System.currentTimeMillis()
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         updateAdminStatusUI()
         updateBreakBankUI()
         updateBufferLimitUI()
         pushLiveTelemetryToFirebase()
-        if (allPermissionsGranted() && cameraProvider == null) startCamera()
+
+        val activeSlot = getActiveStudySlot()
+        val (isPreSlotActive, _) = getPreSlotWindowInfo()
+        val shouldCameraRun = !isSentryArmed || isAlwaysActiveMode || activeSlot != -1 || isPreSlotActive || isArmingGraceActive
+
+        if (shouldCameraRun) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (allPermissionsGranted() && !isCameraRunning) startCamera()
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (isCameraRunning) stopCamera()
+        }
     }
 
     override fun onPause() {
@@ -563,6 +583,7 @@ class MainActivity : AppCompatActivity() {
                 armingGraceRemainingSec = 45
                 speak("Sentry armed. 45 seconds to place phone.", true)
                 Toast.makeText(this, "Sentry Armed! 45s to place phone on stand.", Toast.LENGTH_LONG).show()
+                if (!isCameraRunning && allPermissionsGranted()) startCamera()
             } else {
                 requirePinVerification("Disarm Master Sentry & Unlock Device") {
                     switchMasterSentry.isChecked = false
@@ -588,6 +609,7 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit().putBoolean("always_active_mode", target).apply()
                 lastSeenTimestamp = System.currentTimeMillis()
                 speak(if (target) "Override on." else "Schedule on.", true)
+                if (target && !isCameraRunning && allPermissionsGranted()) startCamera()
             }
         }
 
@@ -1079,6 +1101,7 @@ class MainActivity : AppCompatActivity() {
         return -1
     }
 
+    // Updated: Exactly 11-Minute Pre-Slot Detection Window
     private fun getPreSlotWindowInfo(): Pair<Boolean, Int> {
         val isArmed = prefs.getBoolean("sentry_armed", false)
         if (!isArmed || isAlwaysActiveMode) return Pair(false, 0)
@@ -1095,7 +1118,7 @@ class MainActivity : AppCompatActivity() {
                     val def = getDefaultSlotTimes(i)
                     val start = prefs.getInt("slot_${i}_start_h", def.startH) * 60 + prefs.getInt("slot_${i}_start_m", def.startM)
                     val diff = start - currentMinutes
-                    if (diff in 1..10) return Pair(true, i)
+                    if (diff in 1..11) return Pair(true, i)
                 }
             }
         }
@@ -1122,7 +1145,7 @@ class MainActivity : AppCompatActivity() {
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
-                    .setTargetResolution(Size(1920, 1080))
+                    .setTargetResolution(CAMERA_ANALYSIS_RESOLUTION)
                     .build()
 
                 imageAnalysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
@@ -1131,6 +1154,7 @@ class MainActivity : AppCompatActivity() {
 
                 cameraProvider?.unbindAll()
                 val camera = cameraProvider?.bindToLifecycle(this, cameraSelector, preview, imageAnalysis)
+                isCameraRunning = true
 
                 try {
                     val range = camera?.cameraInfo?.exposureState?.exposureCompensationRange
@@ -1140,6 +1164,15 @@ class MainActivity : AppCompatActivity() {
                 btnFlipCamera.text = if (isUsingBackCamera) "📷 Rear" else "📷 Front"
             } catch (e: Exception) { e.printStackTrace() }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun stopCamera() {
+        try {
+            cameraProvider?.unbindAll()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        isCameraRunning = false
     }
 
     private fun isRealDeskUser(pose: Pose, imgWidth: Float, imgHeight: Float): Boolean {
@@ -1216,6 +1249,14 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+
+        // Thermal Frame Throttle Guard (5 FPS)
+        val now = System.currentTimeMillis()
+        if (now - lastAnalyzedFrameTimestamp < FRAME_THROTTLE_INTERVAL_MS) {
+            imageProxy.close()
+            return
+        }
+        lastAnalyzedFrameTimestamp = now
 
         val mediaImage = imageProxy.image
         if (mediaImage == null) {
@@ -1316,6 +1357,26 @@ class MainActivity : AppCompatActivity() {
             override fun run() {
                 val activeSlot = getActiveStudySlot()
                 val (isPreSlotActive, preSlotNum) = getPreSlotWindowInfo()
+
+                // Smart Rest and Camera Sleep Handler
+                val isRestPeriod = isSentryArmed && !isAlwaysActiveMode && activeSlot == -1 && !isPreSlotActive && !isArmingGraceActive
+
+                if (isRestPeriod) {
+                    if (isCameraRunning) {
+                        stopCamera()
+                    }
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else if (isSentryArmed) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    if (!isCameraRunning && allPermissionsGranted()) {
+                        startCamera()
+                    }
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    if (isCameraRunning) {
+                        stopCamera()
+                    }
+                }
 
                 if (lastTrackedSlot != -1 && activeSlot == -1 && !isAlwaysActiveMode && isSentryArmed) {
                     speak("Slot $lastTrackedSlot complete. Great work. Take a break.")
@@ -1526,9 +1587,9 @@ class MainActivity : AppCompatActivity() {
                             tvLiveStatus.setTextColor(Color.parseColor("#38BDF8"))
                             tvCountdown.text = if (isFullyVerifiedAtDesk) "Desk: Aligned ✓ Ready" else "Align Stand • [$personTag | $anchorTag]"
                         } else {
-                            tvLiveStatus.text = "● STANDBY (OUTSIDE ACTIVE HOURS)"
+                            tvLiveStatus.text = "● STANDBY (REST MODE ACTIVE)"
                             tvLiveStatus.setTextColor(Color.GRAY)
-                            tvCountdown.text = "Schedule: Inactive (Silent Mode)"
+                            tvCountdown.text = "Phone Cooling Down • System Sleeping"
                         }
                         stopAlarmAndFinishAbsence()
                     } else {
@@ -1598,7 +1659,7 @@ class MainActivity : AppCompatActivity() {
             override fun run() {
                 prefs.edit().putLong("last_heartbeat_timestamp", System.currentTimeMillis()).apply()
 
-                // 1-SECOND LIVE CLOCK & ALARM STATE PULSE TO FIREBASE
+                // Non-Stop Live Telemetry & Alarm Pulse to Firebase
                 pushLiveTelemetryToFirebase()
 
                 if (isArmingGraceActive) {
@@ -1810,7 +1871,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 101 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) startCamera()
+        if (requestCode == 101 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            val activeSlot = getActiveStudySlot()
+            val (isPreSlotActive, _) = getPreSlotWindowInfo()
+            val shouldCameraRun = !isSentryArmed || isAlwaysActiveMode || activeSlot != -1 || isPreSlotActive || isArmingGraceActive
+            if (shouldCameraRun) startCamera()
+        }
     }
 
     private fun allPermissionsGranted() = ContextCompat.checkSelfPermission(baseContext, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
@@ -1829,6 +1895,7 @@ class MainActivity : AppCompatActivity() {
                 .setValue("OFFLINE")
         } catch (e: Exception) { e.printStackTrace() }
 
+        stopCamera()
         setFirebaseAlarmActive(false)
         isAudioRadarActive = false
         mediaPlayer?.release()
