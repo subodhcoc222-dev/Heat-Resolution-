@@ -84,7 +84,6 @@ class SentryService : Service() {
                 if (intent?.action == Intent.ACTION_SCREEN_OFF) {
                     val activeSlot = getActiveStudySlot()
                     val isPreSlotActive = getPreSlotWindowInfo()
-                    // Only wake up if actively in slot or in the 11-min pre-slot window
                     if (activeSlot != -1 || isPreSlotActive) {
                         wakeScreenAndShowApp()
                     }
@@ -252,20 +251,23 @@ class SentryService : Service() {
                     return
                 }
 
+                // Check for Scheduled Auto-Arm execution
+                val targetDateMs = prefs.getLong("auto_arm_target_date_ms", 0L)
+                val isSentryArmed = prefs.getBoolean("sentry_armed", false)
+                if (!isSentryArmed && targetDateMs > 0L) {
+                    if (System.currentTimeMillis() >= targetDateMs) {
+                        prefs.edit().remove("auto_arm_target_date_ms").putBoolean("sentry_armed", true).apply()
+                        wakeScreenAndShowApp()
+                    }
+                }
+
                 val activeSlot = getActiveStudySlot()
                 val isPreSlotActive = getPreSlotWindowInfo()
                 val timeSinceActive = System.currentTimeMillis() - lastAppActiveTimestamp
 
                 // Auto Wakeup 11 minutes prior to slot or while slot is active
                 if ((activeSlot != -1 || isPreSlotActive) && !isAppInForeground && timeSinceActive > 2500L) {
-                    val intent = Intent(applicationContext, MainActivity::class.java).apply {
-                        addFlags(
-                            Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP
-                        )
-                    }
-                    startActivity(intent)
+                    wakeScreenAndShowApp()
                 }
 
                 // 10-Second Periodic Cloud Heartbeat
@@ -281,7 +283,7 @@ class SentryService : Service() {
     }
 
     private fun getActiveStudySlot(): Int {
-        val isSentryArmed = prefs.getBoolean("sentry_armed", true)
+        val isSentryArmed = prefs.getBoolean("sentry_armed", false)
         val isAlwaysActive = prefs.getBoolean("always_active_mode", false)
 
         if (!isSentryArmed) return -1
@@ -315,7 +317,7 @@ class SentryService : Service() {
 
     // Exactly 11-Minute Pre-Slot Wakeup Window
     private fun getPreSlotWindowInfo(): Boolean {
-        val isSentryArmed = prefs.getBoolean("sentry_armed", true)
+        val isSentryArmed = prefs.getBoolean("sentry_armed", false)
         val isAlwaysActive = prefs.getBoolean("always_active_mode", false)
         if (!isSentryArmed || isAlwaysActive) return false
 
