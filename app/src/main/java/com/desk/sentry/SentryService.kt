@@ -83,7 +83,9 @@ class SentryService : Service() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (intent?.action == Intent.ACTION_SCREEN_OFF) {
                     val activeSlot = getActiveStudySlot()
-                    if (activeSlot != -1) {
+                    val isPreSlotActive = getPreSlotWindowInfo()
+                    // Only wake up if actively in slot or in the 11-min pre-slot window
+                    if (activeSlot != -1 || isPreSlotActive) {
                         wakeScreenAndShowApp()
                     }
                 }
@@ -251,9 +253,11 @@ class SentryService : Service() {
                 }
 
                 val activeSlot = getActiveStudySlot()
+                val isPreSlotActive = getPreSlotWindowInfo()
                 val timeSinceActive = System.currentTimeMillis() - lastAppActiveTimestamp
 
-                if (activeSlot != -1 && !isAppInForeground && timeSinceActive > 2500L) {
+                // Auto Wakeup 11 minutes prior to slot or while slot is active
+                if ((activeSlot != -1 || isPreSlotActive) && !isAppInForeground && timeSinceActive > 2500L) {
                     val intent = Intent(applicationContext, MainActivity::class.java).apply {
                         addFlags(
                             Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -264,7 +268,7 @@ class SentryService : Service() {
                     startActivity(intent)
                 }
 
-                // 10-Second Periodic Cloud Heartbeat for Dead Man's Switch
+                // 10-Second Periodic Cloud Heartbeat
                 heartbeatTimerTicks++
                 if (heartbeatTimerTicks >= 10) {
                     heartbeatTimerTicks = 0
@@ -307,6 +311,35 @@ class SentryService : Service() {
             }
         }
         return -1
+    }
+
+    // Exactly 11-Minute Pre-Slot Wakeup Window
+    private fun getPreSlotWindowInfo(): Boolean {
+        val isSentryArmed = prefs.getBoolean("sentry_armed", true)
+        val isAlwaysActive = prefs.getBoolean("always_active_mode", false)
+        if (!isSentryArmed || isAlwaysActive) return false
+
+        val now = Calendar.getInstance()
+        val currentDayOfWeek = now.get(Calendar.DAY_OF_WEEK)
+        val currentMinutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+
+        val defaultTimes = arrayOf(
+            Pair(5, 9), Pair(10, 14), Pair(15, 18), Pair(19, 21), Pair(21, 23)
+        )
+
+        for (i in 1..5) {
+            val isEnabled = prefs.getBoolean("slot_${i}_enabled", i <= 2)
+            if (isEnabled) {
+                val isDayActive = prefs.getBoolean("slot_${i}_day_$currentDayOfWeek", currentDayOfWeek != Calendar.SUNDAY)
+                if (isDayActive) {
+                    val idx = i - 1
+                    val start = prefs.getInt("slot_${i}_start_h", defaultTimes[idx].first) * 60 + prefs.getInt("slot_${i}_start_m", 0)
+                    val diff = start - currentMinutes
+                    if (diff in 1..11) return true
+                }
+            }
+        }
+        return false
     }
 
     private fun stopForegroundSafely() {
