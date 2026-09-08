@@ -3,6 +3,7 @@ package com.desk.sentry
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.app.admin.DevicePolicyManager
 import android.content.BroadcastReceiver
@@ -69,7 +70,6 @@ class MainActivity : AppCompatActivity() {
     // ==========================================
     // THERMAL & RESOLUTION CONFIGURATION
     // ==========================================
-    // 480p default for test. Change to Size(1280, 720) for 720p test.
     private val CAMERA_ANALYSIS_RESOLUTION = Size(640, 480)
     private val FRAME_THROTTLE_INTERVAL_MS = 200L // 5 FPS (200ms throttle)
     private var lastAnalyzedFrameTimestamp = 0L
@@ -215,6 +215,9 @@ class MainActivity : AppCompatActivity() {
         checkAllPermissions()
         checkAndProcessDeviceShutdownRecovery()
 
+        // Check if a scheduled auto-arm date was reached
+        checkScheduledAutoArm()
+
         if (isSentryArmed) {
             startPersistentBackgroundService()
         }
@@ -259,6 +262,19 @@ class MainActivity : AppCompatActivity() {
         startMonitoringLoop()
         startPeriodicTimeTracker()
         startDedicatedRadarBeepEngine()
+    }
+
+    private fun checkScheduledAutoArm() {
+        val targetDateMs = prefs.getLong("auto_arm_target_date_ms", 0L)
+        if (!isSentryArmed && targetDateMs > 0L) {
+            val now = System.currentTimeMillis()
+            if (now >= targetDateMs) {
+                prefs.edit().remove("auto_arm_target_date_ms").putBoolean("sentry_armed", true).apply()
+                isSentryArmed = true
+                startPersistentBackgroundService()
+                speak("Sentry auto-armed by schedule.", true)
+            }
+        }
     }
 
     private fun setupInstantPowerHardwareListener() {
@@ -492,6 +508,10 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         SentryService.isMainActivityVisible = true
         SentryService.lastAppActiveTimestamp = System.currentTimeMillis()
+        checkScheduledAutoArm()
+        if (::switchMasterSentry.isInitialized) {
+            switchMasterSentry.isChecked = isSentryArmed
+        }
         updateAdminStatusUI()
         updateBreakBankUI()
         updateBufferLimitUI()
@@ -577,7 +597,7 @@ class MainActivity : AppCompatActivity() {
             if (target) {
                 switchMasterSentry.isChecked = true
                 isSentryArmed = true
-                prefs.edit().putBoolean("sentry_armed", true).apply()
+                prefs.edit().putBoolean("sentry_armed", true).remove("auto_arm_target_date_ms").apply()
                 startPersistentBackgroundService()
                 isArmingGraceActive = true
                 armingGraceRemainingSec = 45
@@ -585,17 +605,8 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Sentry Armed! 45s to place phone on stand.", Toast.LENGTH_LONG).show()
                 if (!isCameraRunning && allPermissionsGranted()) startCamera()
             } else {
-                requirePinVerification("Disarm Master Sentry & Unlock Device") {
-                    switchMasterSentry.isChecked = false
-                    isSentryArmed = false
-                    prefs.edit().putBoolean("sentry_armed", false).apply()
-                    stopPersistentBackgroundService()
-                    stopAlarmAndFinishAbsence()
-                    isArmingGraceActive = false
-                    isAudioRadarActive = false
-                    tts?.stop()
-                    speak("Sentry disarmed.", true)
-                    Toast.makeText(this, "Sentry Disarmed. System Unlocked.", Toast.LENGTH_SHORT).show()
+                requirePinVerification("Disarm Master Sentry") {
+                    showDisarmModeDialog()
                 }
             }
         }
@@ -684,6 +695,65 @@ class MainActivity : AppCompatActivity() {
                 btnTestAlarm.text = "⏹ Stop"
             }
         }
+    }
+
+    // ==========================================
+    // DISARM OPTIONS: DATE SCHEDULE vs UNLIMITED
+    // ==========================================
+    private fun showDisarmModeDialog() {
+        val options = arrayOf("📅 Set Auto-Arm Date (Calendar)", "♾️ Disarm Indefinitely (Unlimited Time)")
+        AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
+            .setTitle("🛡️ Select Disarm Duration")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> openAutoArmDatePicker()
+                    1 -> applyDisarmState(indefinite = true, targetTimestamp = 0L)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun openAutoArmDatePicker() {
+        val c = Calendar.getInstance()
+        val dpd = DatePickerDialog(this, { _, year, month, dayOfMonth ->
+            val targetCal = Calendar.getInstance().apply {
+                set(Calendar.YEAR, year)
+                set(Calendar.MONTH, month)
+                set(Calendar.DAY_OF_MONTH, dayOfMonth)
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            applyDisarmState(indefinite = false, targetTimestamp = targetCal.timeInMillis)
+            val dateStr = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(targetCal.time)
+            Toast.makeText(this, "Sentry will auto-arm on $dateStr", Toast.LENGTH_LONG).show()
+        }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH))
+
+        dpd.datePicker.minDate = System.currentTimeMillis() + 86400000L
+        dpd.show()
+    }
+
+    private fun applyDisarmState(indefinite: Boolean, targetTimestamp: Long) {
+        switchMasterSentry.isChecked = false
+        isSentryArmed = false
+
+        val editor = prefs.edit()
+        editor.putBoolean("sentry_armed", false)
+        if (!indefinite && targetTimestamp > 0L) {
+            editor.putLong("auto_arm_target_date_ms", targetTimestamp)
+        } else {
+            editor.remove("auto_arm_target_date_ms")
+        }
+        editor.apply()
+
+        stopAlarmAndFinishAbsence()
+        isArmingGraceActive = false
+        isAudioRadarActive = false
+        tts?.stop()
+        speak(if (indefinite) "Sentry disarmed indefinitely." else "Sentry disarmed. Auto arm scheduled.", true)
+        Toast.makeText(this, "Sentry Disarmed.", Toast.LENGTH_SHORT).show()
     }
 
     private fun openRingtonePicker() {
@@ -1101,7 +1171,6 @@ class MainActivity : AppCompatActivity() {
         return -1
     }
 
-    // Updated: Exactly 11-Minute Pre-Slot Detection Window
     private fun getPreSlotWindowInfo(): Pair<Boolean, Int> {
         val isArmed = prefs.getBoolean("sentry_armed", false)
         if (!isArmed || isAlwaysActiveMode) return Pair(false, 0)
@@ -1358,7 +1427,6 @@ class MainActivity : AppCompatActivity() {
                 val activeSlot = getActiveStudySlot()
                 val (isPreSlotActive, preSlotNum) = getPreSlotWindowInfo()
 
-                // Smart Rest and Camera Sleep Handler
                 val isRestPeriod = isSentryArmed && !isAlwaysActiveMode && activeSlot == -1 && !isPreSlotActive && !isArmingGraceActive
 
                 if (isRestPeriod) {
@@ -1470,9 +1538,16 @@ class MainActivity : AppCompatActivity() {
 
                 if (!isSentryArmed) {
                     isAudioRadarActive = false
-                    tvLiveStatus.text = "● SENTRY DISARMED (SAFE MODE)"
+                    val targetDateMs = prefs.getLong("auto_arm_target_date_ms", 0L)
+                    if (targetDateMs > 0L) {
+                        val dateStr = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(targetDateMs))
+                        tvLiveStatus.text = "● DISARMED (AUTO-ARM: $dateStr)"
+                        tvCountdown.text = "Will automatically re-arm on $dateStr"
+                    } else {
+                        tvLiveStatus.text = "● SENTRY DISARMED (SAFE MODE)"
+                        tvCountdown.text = "Normal Phone Mode • Turn on Master Sentry to Arm"
+                    }
                     tvLiveStatus.setTextColor(Color.GRAY)
-                    tvCountdown.text = "Normal Phone Mode • Turn on Master Sentry to Arm"
                     stopAlarmAndFinishAbsence()
                 } else if (isArmingGraceActive) {
                     isAudioRadarActive = false
@@ -1552,10 +1627,19 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
 
-                        val shouldAudioAssistBeActive = isPreSlotActive || (activeSlot != -1 && hasAnnouncedExitForCurrentAbsence)
+                        // ==========================================
+                        // 5-SECOND MOVEMENT DEBOUNCE CALM BEEP
+                        // ==========================================
+                        val isWithinDebounceWindow = activeSlot != -1 && awaySinceMs < FALSE_EXIT_DEBOUNCE_MS
+                        val shouldAudioAssistBeActive = isPreSlotActive || (activeSlot != -1 && hasAnnouncedExitForCurrentAbsence) || isWithinDebounceWindow
 
                         if (shouldAudioAssistBeActive) {
-                            if (isPreSlotActive) {
+                            if (isWithinDebounceWindow) {
+                                // Normal calm beep every 1000ms for pose/seat adjustment
+                                currentBeepIntervalMs = 1000L
+                                currentBeepTone = ToneGenerator.TONE_PROP_BEEP2
+                                currentBeepDurationMs = 60
+                            } else if (isPreSlotActive) {
                                 currentBeepIntervalMs = 2000L
                                 currentBeepTone = ToneGenerator.TONE_PROP_BEEP2
                                 currentBeepDurationMs = 70
