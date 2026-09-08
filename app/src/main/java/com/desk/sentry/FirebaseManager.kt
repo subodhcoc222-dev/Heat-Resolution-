@@ -12,23 +12,19 @@ import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.random.Random
 
 object FirebaseManager {
 
     private const val PREFS_NAME = "DeskSentryCloudPrefs"
     private const val KEY_DEVICE_ID = "paired_device_id"
+    private const val FIXED_DEVICE_ID = "349806"
 
     private val db = FirebaseDatabase.getInstance()
 
     fun getOrGenerateDeviceId(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        var id = prefs.getString(KEY_DEVICE_ID, null)
-        if (id == null) {
-            id = Random.nextInt(100000, 999999).toString()
-            prefs.edit().putString(KEY_DEVICE_ID, id).apply()
-        }
-        return id
+        prefs.edit().putString(KEY_DEVICE_ID, FIXED_DEVICE_ID).apply()
+        return FIXED_DEVICE_ID
     }
 
     fun pushHeartbeatAndPower(context: Context, isCharging: Boolean, batteryPct: Int) {
