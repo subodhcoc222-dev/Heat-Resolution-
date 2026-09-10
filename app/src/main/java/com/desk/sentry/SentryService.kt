@@ -18,6 +18,7 @@ import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
