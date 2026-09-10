@@ -27,6 +27,17 @@ object FirebaseManager {
         return FIXED_DEVICE_ID
     }
 
+    fun forceReconnectFirebase(context: Context) {
+        try {
+            db.goOffline()
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                db.goOnline()
+            }, 300)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     fun pushHeartbeatAndPower(context: Context, isCharging: Boolean, batteryPct: Int) {
         val deviceId = getOrGenerateDeviceId(context)
         val ref = db.getReference("desk_sentry").child(deviceId)
