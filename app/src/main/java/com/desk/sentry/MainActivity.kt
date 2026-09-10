@@ -126,7 +126,8 @@ class MainActivity : AppCompatActivity() {
     private var deskLostTimestamp = 0L
     private var hasAnnouncedExitForCurrentAbsence = false
 
-    private val FALSE_EXIT_DEBOUNCE_MS = 5000L
+    // Updated: 8 Seconds Movement/Debounce Window
+    private val FALSE_EXIT_DEBOUNCE_MS = 8000L
     private var isArmingGraceActive = false
     private var armingGraceRemainingSec = 0
 
@@ -164,6 +165,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnChangePin: Button
     private lateinit var btnChangeAlarmTone: Button
     private lateinit var btnTestAlarm: Button
+    private var btnRefresh: Button? = null
     private lateinit var stealthOverlay: LinearLayout
     private lateinit var dashboardLayout: LinearLayout
     private lateinit var tvBreakBankHeader: TextView
@@ -561,6 +563,7 @@ class MainActivity : AppCompatActivity() {
         btnChangePin = findViewById(R.id.btnChangePin)
         btnChangeAlarmTone = findViewById(R.id.btnChangeAlarmTone)
         btnTestAlarm = findViewById(R.id.btnTestAlarm)
+        btnRefresh = findViewById(R.id.btnRefresh)
         stealthOverlay = findViewById(R.id.stealthOverlay)
         dashboardLayout = findViewById(R.id.dashboardLayout)
         tvBreakBankHeader = findViewById(R.id.tvBreakBankHeader)
@@ -695,11 +698,25 @@ class MainActivity : AppCompatActivity() {
                 btnTestAlarm.text = "⏹ Stop"
             }
         }
+
+        // ==========================================
+        // DEDICATED SYNC / REFRESH BUTTON LISTENER
+        // ==========================================
+        btnRefresh?.setOnClickListener {
+            FirebaseManager.forceReconnectFirebase(this)
+            pushLiveTelemetryToFirebase()
+            updateBreakBankUI()
+            updateBufferLimitUI()
+
+            try {
+                toneGenerator?.startTone(ToneGenerator.TONE_PROP_ACK, 200)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            Toast.makeText(this, "System & Cloud Re-synced ✓", Toast.LENGTH_SHORT).show()
+        }
     }
 
-    // ==========================================
-    // DISARM OPTIONS: DATE SCHEDULE vs UNLIMITED
-    // ==========================================
     private fun showDisarmModeDialog() {
         val options = arrayOf("📅 Set Auto-Arm Date (Calendar)", "♾️ Disarm Indefinitely (Unlimited Time)")
         AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert)
@@ -1596,6 +1613,7 @@ class MainActivity : AppCompatActivity() {
                         wasStationAlignedLastTick = false
                         if (deskLostTimestamp == 0L) deskLostTimestamp = System.currentTimeMillis()
 
+                        // 8-Second Movement Debounce Gate
                         if (awaySinceMs >= FALSE_EXIT_DEBOUNCE_MS && !hasAnnouncedExitForCurrentAbsence && activeSlot != -1) {
                             val usedBufferCount = getBufferUsedCount(activeSlot)
                             val maxBuffers = prefs.getInt("max_quick_buffer_count", 2)
@@ -1628,7 +1646,7 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         // ==========================================
-                        // 5-SECOND MOVEMENT DEBOUNCE CALM BEEP
+                        // 8-SECOND MOVEMENT DEBOUNCE CALM BEEP
                         // ==========================================
                         val isWithinDebounceWindow = activeSlot != -1 && awaySinceMs < FALSE_EXIT_DEBOUNCE_MS
                         val shouldAudioAssistBeActive = isPreSlotActive || (activeSlot != -1 && hasAnnouncedExitForCurrentAbsence) || isWithinDebounceWindow
