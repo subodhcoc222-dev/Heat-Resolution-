@@ -126,7 +126,7 @@ class MainActivity : AppCompatActivity() {
     private var deskLostTimestamp = 0L
     private var hasAnnouncedExitForCurrentAbsence = false
 
-    // Updated: 8 Seconds Movement/Debounce Window
+    // Exactly 8 Seconds Movement/Debounce Window
     private val FALSE_EXIT_DEBOUNCE_MS = 8000L
     private var isArmingGraceActive = false
     private var armingGraceRemainingSec = 0
@@ -220,6 +220,9 @@ class MainActivity : AppCompatActivity() {
         // Check if a scheduled auto-arm date was reached
         checkScheduledAutoArm()
 
+        // Initialize Cloud Health Monitoring
+        FirebaseManager.setupConnectionMonitoring(this)
+
         if (isSentryArmed) {
             startPersistentBackgroundService()
         }
@@ -282,6 +285,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupInstantPowerHardwareListener() {
         powerStateReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
+                FirebaseManager.forceReconnectFirebase(this@MainActivity)
                 pushLiveTelemetryToFirebase()
             }
         }
@@ -1763,6 +1767,15 @@ class MainActivity : AppCompatActivity() {
 
                 // Non-Stop Live Telemetry & Alarm Pulse to Firebase
                 pushLiveTelemetryToFirebase()
+
+                // Self-Healing Status Live Feedback
+                if (FirebaseManager.isCloudConnected) {
+                    tvCloudStatus.text = "● CLOUD"
+                    tvCloudStatus.setTextColor(Color.parseColor("#10B981"))
+                } else {
+                    tvCloudStatus.text = "● RE-SYNCING"
+                    tvCloudStatus.setTextColor(Color.parseColor("#F59E0B"))
+                }
 
                 if (isArmingGraceActive) {
                     armingGraceRemainingSec--
