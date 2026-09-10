@@ -21,12 +21,33 @@ object FirebaseManager {
 
     private val db = FirebaseDatabase.getInstance()
 
+    // Self-Healing Live State Tracking
+    @Volatile var isCloudConnected = false
+    @Volatile var lastSuccessfulConnectionMs = System.currentTimeMillis()
+
     fun getOrGenerateDeviceId(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putString(KEY_DEVICE_ID, FIXED_DEVICE_ID).apply()
         return FIXED_DEVICE_ID
     }
 
+    // Firebase Internal Socket Health Listener
+    fun setupConnectionMonitoring(context: Context) {
+        val connectedRef = db.getReference(".info/connected")
+        connectedRef.addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val connected = snapshot.getValue(Boolean::class.java) ?: false
+                isCloudConnected = connected
+                if (connected) {
+                    lastSuccessfulConnectionMs = System.currentTimeMillis()
+                }
+            }
+
+            override fun onCancelled(error: DatabaseError) {}
+        })
+    }
+
+    // Hard Socket Re-boot Engine
     fun forceReconnectFirebase(context: Context) {
         try {
             db.goOffline()
