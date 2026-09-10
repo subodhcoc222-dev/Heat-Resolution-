@@ -517,29 +517,40 @@
                                 android:layout_width="0dp"
                                 android:layout_height="34dp"
                                 android:layout_weight="1"
-                                android:layout_marginEnd="4dp"
+                                android:layout_marginEnd="3dp"
                                 android:text="🔑 PIN"
-                                android:textSize="10sp"
+                                android:textSize="9sp"
                                 android:backgroundTint="#475569" />
 
                             <Button
                                 android:id="@+id/btnChangeAlarmTone"
                                 android:layout_width="0dp"
                                 android:layout_height="34dp"
-                                android:layout_weight="1.3"
-                                android:layout_marginEnd="4dp"
+                                android:layout_weight="1.1"
+                                android:layout_marginEnd="3dp"
                                 android:text="🔔 Tone"
-                                android:textSize="10sp"
+                                android:textSize="9sp"
                                 android:backgroundTint="#D97706" />
 
                             <Button
                                 android:id="@+id/btnTestAlarm"
                                 android:layout_width="0dp"
                                 android:layout_height="34dp"
-                                android:layout_weight="1.2"
+                                android:layout_weight="1.1"
+                                android:layout_marginEnd="3dp"
                                 android:text="🚨 Test"
-                                android:textSize="10sp"
+                                android:textSize="9sp"
                                 android:backgroundTint="#B91C1C" />
+
+                            <Button
+                                android:id="@+id/btnRefresh"
+                                android:layout_width="0dp"
+                                android:layout_height="34dp"
+                                android:layout_weight="1.1"
+                                android:text="🔄 Sync"
+                                android:textSize="9sp"
+                                android:textColor="#FFFFFF"
+                                android:backgroundTint="#0284C7" />
                         </LinearLayout>
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
