@@ -18,7 +18,6 @@ import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
-import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
@@ -37,6 +36,10 @@ class SentryService : Service() {
     private var powerReceiver: BroadcastReceiver? = null
 
     private var heartbeatTimerTicks = 0
+
+    // Self-Healing Watchdog Timers
+    private var socketDisconnectedSeconds = 0
+    private var preventive15MinCounterSeconds = 0
 
     companion object {
         const val ACTION_START = "ACTION_START"
@@ -63,6 +66,9 @@ class SentryService : Service() {
             setReferenceCounted(false)
             acquire(24 * 60 * 60 * 1000L)
         }
+
+        // Initialize Cloud Health Monitoring
+        FirebaseManager.setupConnectionMonitoring(this)
 
         registerScreenLockMonitor()
         registerPowerMonitor()
@@ -104,7 +110,8 @@ class SentryService : Service() {
                 val isCharging = action == Intent.ACTION_POWER_CONNECTED
                 val batteryPct = getBatteryPercentage()
 
-                // Instant Cloud Push on Cable Change
+                // Self-Healing trigger: Force revive socket when power state changes
+                FirebaseManager.forceReconnectFirebase(this@SentryService)
                 FirebaseManager.pushHeartbeatAndPower(this@SentryService, isCharging, batteryPct)
                 
                 val detail = if (isCharging) "Charger Connected at $batteryPct%" else "Charger Unplugged at $batteryPct%"
@@ -277,6 +284,31 @@ class SentryService : Service() {
                     pushLiveHeartbeat()
                 }
 
+                // ==========================================
+                // SMART SELF-HEALING ENGINE (CAMERA APP)
+                // ==========================================
+                if (!FirebaseManager.isCloudConnected) {
+                    socketDisconnectedSeconds++
+                    // If socket is disconnected for 30 consecutive seconds, auto-heal silently
+                    if (socketDisconnectedSeconds >= 30) {
+                        socketDisconnectedSeconds = 0
+                        FirebaseManager.forceReconnectFirebase(this@SentryService)
+                        pushLiveHeartbeat()
+                    }
+                } else {
+                    socketDisconnectedSeconds = 0
+                }
+
+                // 15-Minute Periodic Silent Preventive Re-sync (900 seconds)
+                preventive15MinCounterSeconds++
+                if (preventive15MinCounterSeconds >= 900) {
+                    preventive15MinCounterSeconds = 0
+                    if (!FirebaseManager.isCloudConnected) {
+                        FirebaseManager.forceReconnectFirebase(this@SentryService)
+                    }
+                    pushLiveHeartbeat()
+                }
+
                 handler.postDelayed(this, 1000)
             }
         })
@@ -315,7 +347,6 @@ class SentryService : Service() {
         return -1
     }
 
-    // Exactly 11-Minute Pre-Slot Wakeup Window
     private fun getPreSlotWindowInfo(): Boolean {
         val isSentryArmed = prefs.getBoolean("sentry_armed", false)
         val isAlwaysActive = prefs.getBoolean("always_active_mode", false)
